@@ -612,37 +612,82 @@ function renderDomainCard(group, groupIndex) {
   const tabCount  = tabs.length;
   const stableId  = 'domain-' + group.domain.replace(/[^a-z0-9]/g, '-');
 
+  // Detect duplicates within this domain group (same URL multiple times)
+  const urlCounts = {};
+  for (const tab of tabs) {
+    urlCounts[tab.url] = (urlCounts[tab.url] || 0) + 1;
+  }
+  const dupeUrls = Object.entries(urlCounts).filter(([, c]) => c > 1);
+  const hasDupes = dupeUrls.length > 0;
+  const totalExtras = dupeUrls.reduce((s, [, c]) => s + c - 1, 0);
+
   // Tab count badge
   const tabBadge = `<span class="open-tabs-badge">
     ${ICONS.tabs}
     ${tabCount} tab${tabCount !== 1 ? 's' : ''} open
   </span>`;
 
-  // Page chips — show up to 5, summarize the rest
-  const visibleTabs = tabs.slice(0, 5);
-  const extraCount  = tabs.length - visibleTabs.length;
+  // Duplicate warning badge
+  const dupeBadge = hasDupes
+    ? `<span class="open-tabs-badge" style="color: var(--accent-amber); background: rgba(200, 113, 58, 0.08);">
+        ${totalExtras} duplicate${totalExtras !== 1 ? 's' : ''}
+      </span>`
+    : '';
+
+  // Page chips — show up to 5, flag duplicates with count and amber color
+  // Deduplicate for display: show each URL once with a (Nx) badge if duplicated
+  const seen = new Set();
+  const uniqueTabs = [];
+  for (const tab of tabs) {
+    if (!seen.has(tab.url)) {
+      seen.add(tab.url);
+      uniqueTabs.push(tab);
+    }
+  }
+  const visibleTabs = uniqueTabs.slice(0, 5);
+  const extraCount  = uniqueTabs.length - visibleTabs.length;
   const pageChips = visibleTabs.map(tab => {
     const label   = tab.title || tab.url || '';
     const display = label.length > 45 ? label.slice(0, 45) + '…' : label;
-    return `<span class="page-chip clickable" data-action="focus-tab" data-tab-url="${(tab.url || '').replace(/"/g, '&quot;')}" title="${label.replace(/"/g, '&quot;')}">${display}</span>`;
+    const count   = urlCounts[tab.url];
+    const dupeTag = count > 1
+      ? ` <span style="color:var(--accent-amber);font-weight:600">(${count}x)</span>`
+      : '';
+    const chipStyle = count > 1 ? ' style="border-color: rgba(200, 113, 58, 0.3);"' : '';
+    return `<span class="page-chip clickable"${chipStyle} data-action="focus-tab" data-tab-url="${(tab.url || '').replace(/"/g, '&quot;')}" title="${label.replace(/"/g, '&quot;')}">${display}${dupeTag}</span>`;
   }).join('') + (extraCount > 0 ? `<span class="page-chip">+${extraCount} more</span>` : '');
+
+  // Use amber status bar if there are duplicates
+  const statusBarClass = hasDupes ? 'active' : 'neutral';
+  const statusBarStyle = hasDupes ? ' style="background: var(--accent-amber);"' : '';
+
+  // Actions: always show close all, add "Close duplicates" if dupes exist
+  let actionsHtml = `
+    <button class="action-btn close-tabs" data-action="close-domain-tabs" data-domain-id="${stableId}">
+      ${ICONS.close}
+      Close all ${tabCount} tab${tabCount !== 1 ? 's' : ''}
+    </button>`;
+
+  if (hasDupes) {
+    const dupeUrlsEncoded = dupeUrls.map(([url]) => encodeURIComponent(url)).join(',');
+    actionsHtml += `
+      <button class="action-btn" data-action="dedup-keep-one" data-dupe-urls="${dupeUrlsEncoded}">
+        Close ${totalExtras} duplicate${totalExtras !== 1 ? 's' : ''}
+      </button>`;
+  }
 
   return `
     <div class="mission-card domain-card" data-domain-id="${stableId}">
-      <div class="status-bar neutral"></div>
+      <div class="status-bar"${statusBarStyle}></div>
       <div class="mission-content">
         <div class="mission-top">
           <span class="mission-name">${group.domain}</span>
           <span class="mission-tag neutral">Domain</span>
           ${tabBadge}
+          ${dupeBadge}
         </div>
         <div class="mission-pages">${pageChips}</div>
-        <div class="actions">
-          <button class="action-btn close-tabs" data-action="close-domain-tabs" data-domain-id="${stableId}">
-            ${ICONS.close}
-            Close all ${tabCount} tab${tabCount !== 1 ? 's' : ''}
-          </button>
-        </div>
+        <div class="actions">${actionsHtml}</div>
       </div>
       <div class="mission-meta">
         <div class="mission-page-count">${tabCount}</div>
