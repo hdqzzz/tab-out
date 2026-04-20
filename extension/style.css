@@ -401,6 +401,21 @@ header {
   font-weight: 600;
 }
 
+/* Suspended (frozen) badge — The Marvellous Suspender */
+.chip-suspended-badge {
+  font-size: 12px;
+  filter: grayscale(1) opacity(0.45);
+}
+
+/* Suspended tab row — slightly dimmed to hint it's sleeping */
+.chip-is-suspended {
+  opacity: 0.7;
+}
+
+.chip-is-suspended:hover {
+  opacity: 1;
+}
+
 /* Duplicate border highlight */
 .chip-has-dupes {
   border-color: rgba(200, 113, 58, 0.25);

@@ -26,8 +26,11 @@ async function updateBadge() {
     const tabs = await chrome.tabs.query({});
 
     // Only count actual web pages — skip browser internals and extension pages
+    // Allow Marvellous Suspender frozen tabs (they are real pages, just sleeping)
+    const SUSPENDER_PREFIX = 'chrome-extension://noogafoofpebimajpfpamcfhoaifemoa/suspended.html';
     const count = tabs.filter(t => {
       const url = t.url || '';
+      if (url.startsWith(SUSPENDER_PREFIX)) return true;
       return (
         !url.startsWith('chrome://') &&
         !url.startsWith('chrome-extension://') &&

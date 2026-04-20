@@ -123,6 +123,14 @@ async function focusTab(url) {
   // Try exact URL match first
   let matches = allTabs.filter(t => t.url === url);
 
+  // Also try matching suspended tabs by their original URI
+  if (matches.length === 0) {
+    matches = allTabs.filter(t => {
+      const suspended = parseSuspendedTab(t.url);
+      return suspended && suspended.originalUrl === url;
+    });
+  }
+
   // Fall back to hostname match
   if (matches.length === 0) {
     try {
@@ -710,6 +718,54 @@ let domainGroups = [];
 
 
 /* ----------------------------------------------------------------
+   HELPER: detect & resolve Marvellous Suspender frozen tabs
+   ---------------------------------------------------------------- */
+
+// Extension ID for The Marvellous Suspender
+const SUSPENDER_ID = 'noogafoofpebimajpfpamcfhoaifemoa';
+const SUSPENDER_PREFIX = `chrome-extension://${SUSPENDER_ID}/suspended.html#`;
+
+/**
+ * parseSuspendedTab(url)
+ *
+ * If url is a Marvellous Suspender frozen-tab URL, parse out the
+ * original URI and title from the hash fragment.
+ * Returns { originalUrl, originalTitle } or null.
+ */
+function parseSuspendedTab(url) {
+  if (!url || !url.startsWith(SUSPENDER_PREFIX)) return null;
+  const hash = url.slice(url.indexOf('#') + 1);
+  const params = new URLSearchParams(hash);
+  const originalUrl = params.get('uri');
+  if (!originalUrl) return null;
+  return {
+    originalUrl,
+    originalTitle: params.get('ttl') || '',
+  };
+}
+
+/**
+ * resolveSuspendedTab(tab)
+ *
+ * If a tab is frozen by Marvellous Suspender, replace its url and
+ * title with the original values so downstream logic (grouping,
+ * dedup, rendering) sees the real page. Marks isSuspended = true
+ * for optional UI treatment.
+ */
+function resolveSuspendedTab(tab) {
+  const suspended = parseSuspendedTab(tab.url);
+  if (!suspended) return tab;
+  return {
+    ...tab,
+    url:         suspended.originalUrl,
+    title:       tab.title && tab.title !== 'Suspended Tab' ? tab.title : suspended.originalTitle,
+    isSuspended: true,
+    _rawUrl:     tab.url,   // keep original for reverse lookups
+  };
+}
+
+
+/* ----------------------------------------------------------------
    HELPER: filter out browser-internal pages
    ---------------------------------------------------------------- */
 
@@ -717,11 +773,14 @@ let domainGroups = [];
  * getRealTabs()
  *
  * Returns tabs that are real web pages — no chrome://, extension
- * pages, about:blank, etc.
+ * pages, about:blank, etc. Marvellous Suspender frozen tabs are
+ * allowed through and resolved to their original URLs.
  */
 function getRealTabs() {
   return openTabs.filter(t => {
     const url = t.url || '';
+    // Allow Marvellous Suspender frozen tabs through
+    if (parseSuspendedTab(url)) return true;
     return (
       !url.startsWith('chrome://') &&
       !url.startsWith('chrome-extension://') &&
@@ -729,7 +788,7 @@ function getRealTabs() {
       !url.startsWith('edge://') &&
       !url.startsWith('brave://')
     );
-  });
+  }).map(t => resolveSuspendedTab(t));
 }
 
 /**
@@ -762,7 +821,8 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const label    = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), '');
     const count    = urlCounts[tab.url] || 1;
     const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
-    const chipClass = count > 1 ? ' chip-has-dupes' : '';
+    const suspendedTag = tab.isSuspended ? ' <span class="chip-suspended-badge">💤</span>' : '';
+    const chipClass = (count > 1 ? ' chip-has-dupes' : '') + (tab.isSuspended ? ' chip-is-suspended' : '');
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
     let domain = '';
@@ -770,7 +830,7 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
-      <span class="chip-text">${label}</span>${dupeTag}
+      <span class="chip-text">${label}</span>${dupeTag}${suspendedTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
@@ -843,7 +903,8 @@ function renderDomainCard(group) {
     } catch {}
     const count    = urlCounts[tab.url];
     const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
-    const chipClass = count > 1 ? ' chip-has-dupes' : '';
+    const suspendedTag = tab.isSuspended ? ' <span class="chip-suspended-badge">💤</span>' : '';
+    const chipClass = (count > 1 ? ' chip-has-dupes' : '') + (tab.isSuspended ? ' chip-is-suspended' : '');
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
     let domain = '';
@@ -851,7 +912,7 @@ function renderDomainCard(group) {
     const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
-      <span class="chip-text">${label}</span>${dupeTag}
+      <span class="chip-text">${label}</span>${dupeTag}${suspendedTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
@@ -1229,7 +1290,11 @@ document.addEventListener('click', async (e) => {
 
     // Close the tab in Chrome directly
     const allTabs = await chrome.tabs.query({});
-    const match   = allTabs.find(t => t.url === tabUrl);
+    const match   = allTabs.find(t => t.url === tabUrl)
+                 || allTabs.find(t => {
+                      const s = parseSuspendedTab(t.url);
+                      return s && s.originalUrl === tabUrl;
+                    });
     if (match) await chrome.tabs.remove(match.id);
     await fetchOpenTabs();
 
@@ -1282,7 +1347,11 @@ document.addEventListener('click', async (e) => {
 
     // Close the tab in Chrome
     const allTabs = await chrome.tabs.query({});
-    const match   = allTabs.find(t => t.url === tabUrl);
+    const match   = allTabs.find(t => t.url === tabUrl)
+                 || allTabs.find(t => {
+                      const s = parseSuspendedTab(t.url);
+                      return s && s.originalUrl === tabUrl;
+                    });
     if (match) await chrome.tabs.remove(match.id);
     await fetchOpenTabs();
 
@@ -1415,7 +1484,7 @@ document.addEventListener('click', async (e) => {
   // ---- Close ALL open tabs ----
   if (action === 'close-all-open-tabs') {
     const allUrls = openTabs
-      .filter(t => t.url && !t.url.startsWith('chrome') && !t.url.startsWith('about:'))
+      .filter(t => t.url && (!t.url.startsWith('chrome') || parseSuspendedTab(t.url)) && !t.url.startsWith('about:'))
       .map(t => t.url);
     await closeTabsByUrls(allUrls);
     playCloseSound();
