@@ -81,7 +81,9 @@ async function closeTabsByUrls(urls) {
   const allTabs = await chrome.tabs.query({});
   const toClose = allTabs
     .filter(tab => {
-      const tabUrl = tab.url || '';
+      // Resolve suspended tabs to their original URL before matching
+      const suspended = parseSuspendedTab(tab.url);
+      const tabUrl = suspended ? suspended.originalUrl : (tab.url || '');
       if (tabUrl.startsWith('file://') && exactUrls.has(tabUrl)) return true;
       try {
         const tabHostname = new URL(tabUrl).hostname;
@@ -104,7 +106,12 @@ async function closeTabsExact(urls) {
   if (!urls || urls.length === 0) return;
   const urlSet = new Set(urls);
   const allTabs = await chrome.tabs.query({});
-  const toClose = allTabs.filter(t => urlSet.has(t.url)).map(t => t.id);
+  const toClose = allTabs.filter(t => {
+    if (urlSet.has(t.url)) return true;
+    // Also match suspended tabs by their original URI
+    const suspended = parseSuspendedTab(t.url);
+    return suspended && urlSet.has(suspended.originalUrl);
+  }).map(t => t.id);
   if (toClose.length > 0) await chrome.tabs.remove(toClose);
   await fetchOpenTabs();
 }
