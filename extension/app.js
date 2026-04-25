@@ -1553,6 +1553,283 @@ document.addEventListener('input', async (e) => {
 
 
 /* ----------------------------------------------------------------
+   AI PROMPT — Serialize tabs + generate prompts for external AI tools
+
+   This feature exports all open tabs as structured text, wraps them
+   in a purpose-built prompt, and copies to clipboard. The user then
+   pastes into ChatGPT, Gemini, Claude, Cursor, or any AI tool.
+
+   Four preset prompts are available:
+   1. Triage & Clean Up — categorize tabs into close/save/keep
+   2. Summarize Research — infer research topics from tab titles
+   3. Categorize — group tabs into thematic categories
+   4. Raw Data Only — just the structured tab list, no instructions
+   ---------------------------------------------------------------- */
+
+/**
+ * serializeTabsForAI()
+ *
+ * Converts the current domainGroups (already computed by renderStaticDashboard)
+ * into a clean, structured text format suitable for LLM consumption.
+ *
+ * Output format:
+ *   ## My Open Tabs (97 tabs across 23 domains)
+ *   ### GitHub (12 tabs)
+ *   - zarazhangrui/tab-out — Main repo
+ *   - vercel/next.js — Issue #48231
+ *   ...
+ */
+function serializeTabsForAI() {
+  const realTabs = getRealTabs();
+  const totalTabs = realTabs.length;
+  const totalDomains = domainGroups.length;
+
+  let lines = [];
+  lines.push(`## My Open Tabs (${totalTabs} tabs across ${totalDomains} domains)`);
+  lines.push('');
+
+  for (const group of domainGroups) {
+    const isLanding = group.domain === '__landing-pages__';
+    const label = isLanding
+      ? 'Homepages'
+      : (group.label || friendlyDomain(group.domain));
+    const tabs = group.tabs || [];
+
+    lines.push(`### ${label} (${tabs.length} tab${tabs.length !== 1 ? 's' : ''})`);
+
+    // Deduplicate for display
+    const seen = new Set();
+    for (const tab of tabs) {
+      if (seen.has(tab.url)) continue;
+      seen.add(tab.url);
+
+      const dupeCount = tabs.filter(t => t.url === tab.url).length;
+      const title = cleanTitle(
+        smartTitle(stripTitleNoise(tab.title || ''), tab.url),
+        group.domain
+      );
+      const dupeSuffix = dupeCount > 1 ? ` (×${dupeCount} duplicates)` : '';
+      const suspendedSuffix = tab.isSuspended ? ' [suspended]' : '';
+
+      lines.push(`- ${title}${dupeSuffix}${suspendedSuffix}`);
+      lines.push(`  ${tab.url}`);
+    }
+
+    lines.push('');
+  }
+
+  return { text: lines.join('\n').trim(), totalTabs, totalDomains };
+}
+
+/**
+ * AI_PROMPT_PRESETS
+ *
+ * Each preset has an id, and a function that takes serialized tab data
+ * and returns the full prompt string.
+ */
+const AI_PROMPT_PRESETS = {
+  triage: (tabData) => `You are a tab management assistant. I have ${tabData.totalTabs} tabs open across ${tabData.totalDomains} domains. Help me triage them.
+
+For each tab, classify it into one of three categories:
+
+1. 🗑️ **Safe to close** — Temporary tabs, already-read content, stale search results, social media feeds
+2. 📌 **Save for later** — Interesting content I haven't finished reading, reference material I might need
+3. 🔒 **Keep open** — Actively being used, important ongoing work, things I'll need in the next few hours
+
+Rules:
+- Be aggressive about identifying tabs that can be closed. Most people keep far too many tabs open.
+- Homepages (Gmail inbox, X feed, YouTube home, etc.) are almost always safe to close — they can be reopened instantly.
+- Duplicate tabs should always be flagged — keep one copy, close the rest.
+- Suspended/frozen tabs are strong candidates for "save for later" since they're already not being actively used.
+- Group your response by category, not by domain.
+- For each tab, include the domain name and title so I can find it easily.
+
+${tabData.text}`,
+
+  summarize: (tabData) => `Analyze my open browser tabs and help me understand what I'm currently working on and researching.
+
+Based on the tab titles and URLs below, please:
+
+1. **Identify my active workstreams** — What topics or projects am I clearly working on? Group related tabs together.
+2. **Spot research threads** — Am I deep-diving into any particular topic? What stage of research am I at?
+3. **Find connections** — Are there non-obvious relationships between tabs in different domains?
+4. **Surface stale context** — Which tabs look like they're from a previous task/day and no longer relevant?
+
+Be specific and insightful. Don't just list the tabs back to me — synthesize what they tell you about my current focus and priorities.
+
+${tabData.text}`,
+
+  categorize: (tabData) => `Organize my ${tabData.totalTabs} open browser tabs into meaningful thematic categories.
+
+Don't use the domain-based grouping I already have — instead, create categories based on **topic and purpose**. For example:
+- "Machine Learning Research" (might span GitHub, arXiv, YouTube, blog posts)
+- "Shopping / Price Comparison" (might span Amazon, Reddit, review sites)
+- "Work: Project X" (might span Jira, GitHub, Docs, Slack)
+
+For each category:
+1. Give it a clear, descriptive name
+2. List the tabs that belong to it (title + domain)
+3. Rate its priority: 🔴 Active now / 🟡 Background / ⚪ Stale
+4. Suggest whether the whole category can be bookmarked and closed
+
+${tabData.text}`,
+
+  raw: (tabData) => tabData.text,
+};
+
+/**
+ * generateAIPrompt(presetId)
+ *
+ * Serializes current tabs and applies the selected prompt preset.
+ * Returns the full prompt string ready for clipboard.
+ */
+function generateAIPrompt(presetId = 'triage') {
+  const tabData = serializeTabsForAI();
+  const preset = AI_PROMPT_PRESETS[presetId] || AI_PROMPT_PRESETS.triage;
+  return preset(tabData);
+}
+
+/**
+ * estimateTokens(text)
+ *
+ * Rough token estimate: ~4 chars per token for English text.
+ * Good enough for giving users an idea of prompt size.
+ */
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4);
+}
+
+// ---- Current prompt state ----
+let currentAIPreset = 'triage';
+
+/**
+ * updateAIPromptPreview()
+ *
+ * Re-generates the prompt with the current preset and updates
+ * the preview pane + token estimate.
+ */
+function updateAIPromptPreview() {
+  const previewEl = document.getElementById('aiPromptPreview');
+  const tokenEl   = document.getElementById('aiPromptTokenEst');
+  if (!previewEl) return;
+
+  const prompt = generateAIPrompt(currentAIPreset);
+  previewEl.textContent = prompt;
+
+  if (tokenEl) {
+    const tokens = estimateTokens(prompt);
+    tokenEl.textContent = `~${tokens.toLocaleString()} tokens`;
+  }
+}
+
+/**
+ * openAIPromptPanel()
+ *
+ * Shows the AI prompt slide-out panel with animation.
+ */
+function openAIPromptPanel() {
+  const overlay = document.getElementById('aiPromptOverlay');
+  if (!overlay) return;
+
+  overlay.style.display = 'flex';
+  overlay.classList.remove('closing');
+  updateAIPromptPreview();
+}
+
+/**
+ * closeAIPromptPanel()
+ *
+ * Hides the AI prompt panel with a closing animation.
+ */
+function closeAIPromptPanel() {
+  const overlay = document.getElementById('aiPromptOverlay');
+  if (!overlay) return;
+
+  overlay.classList.add('closing');
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    overlay.classList.remove('closing');
+  }, 200);
+}
+
+// ---- AI Prompt event listeners ----
+
+// Open panel
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="open-ai-prompt"]')) {
+    openAIPromptPanel();
+    return;
+  }
+});
+
+// Close panel (X button)
+document.getElementById('aiPromptClose')?.addEventListener('click', closeAIPromptPanel);
+
+// Close panel (click overlay backdrop)
+document.getElementById('aiPromptOverlay')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeAIPromptPanel();
+});
+
+// Close panel (Escape key)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('aiPromptOverlay');
+    if (overlay && overlay.style.display !== 'none') {
+      closeAIPromptPanel();
+    }
+  }
+});
+
+// Preset selection
+document.getElementById('aiPromptPresets')?.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-preset]');
+  if (!chip) return;
+
+  const presetId = chip.dataset.preset;
+  currentAIPreset = presetId;
+
+  // Update active state on chips
+  document.querySelectorAll('.ai-preset-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+
+  // Re-render preview
+  updateAIPromptPreview();
+});
+
+// Copy to clipboard
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('[data-action="copy-ai-prompt"]')) return;
+
+  const prompt = generateAIPrompt(currentAIPreset);
+  const btn = document.getElementById('aiPromptCopyBtn');
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+
+    // Visual feedback: show success state
+    if (btn) {
+      const originalHTML = btn.innerHTML;
+      btn.classList.add('copied');
+      btn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+        Copied!
+      `;
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = originalHTML;
+      }, 2000);
+    }
+
+    showToast('Prompt copied — paste into your AI tool');
+  } catch (err) {
+    console.error('[tab-out] Failed to copy prompt:', err);
+    showToast('Failed to copy — try again');
+  }
+});
+
+
+/* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
 renderDashboard();
+

@@ -1171,3 +1171,322 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   opacity: 0.6;
   flex-shrink: 0;
 }
+
+
+/* ================================================================
+   AI PROMPT — Header button + Slide-out panel
+   Uses sage green accent to differentiate from tab management actions.
+   The panel slides in from the right with a backdrop overlay.
+   ================================================================ */
+
+/* ---- Header button ---- */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-prompt-btn {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.06);
+  border: 1px solid rgba(90, 122, 98, 0.2);
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition: all 0.25s ease;
+  letter-spacing: 0.2px;
+}
+
+.ai-prompt-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-prompt-btn:hover {
+  background: rgba(90, 122, 98, 0.12);
+  border-color: rgba(90, 122, 98, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(90, 122, 98, 0.1);
+}
+
+.ai-prompt-btn:active {
+  transform: translateY(0);
+}
+
+/* ---- Overlay backdrop ---- */
+.ai-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26, 22, 19, 0.25);
+  backdrop-filter: blur(2px);
+  z-index: 500;
+  display: flex;
+  justify-content: flex-end;
+  animation: overlayFadeIn 0.2s ease both;
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ai-prompt-overlay.closing {
+  animation: overlayFadeOut 0.2s ease both;
+}
+
+@keyframes overlayFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ---- Slide-out panel ---- */
+.ai-prompt-panel {
+  width: 520px;
+  max-width: 90vw;
+  height: 100vh;
+  background: var(--card-bg);
+  border-left: 1px solid var(--warm-gray);
+  box-shadow: -8px 0 32px rgba(26, 22, 19, 0.08);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  animation: panelSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes panelSlideIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+.ai-prompt-overlay.closing .ai-prompt-panel {
+  animation: panelSlideOut 0.2s ease both;
+}
+
+@keyframes panelSlideOut {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+
+/* ---- Panel header ---- */
+.ai-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-prompt-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-prompt-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--accent-sage);
+}
+
+.ai-prompt-header h3 {
+  font-family: 'Newsreader', serif;
+  font-weight: 400;
+  font-size: 20px;
+  color: var(--ink);
+  letter-spacing: -0.3px;
+}
+
+.ai-prompt-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+}
+
+.ai-prompt-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ai-prompt-close:hover {
+  background: rgba(26, 22, 19, 0.06);
+  color: var(--ink);
+}
+
+/* ---- Description text ---- */
+.ai-prompt-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: -8px 0 0;
+}
+
+/* ---- Preset selector chips ---- */
+.ai-prompt-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-preset-chip {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--warm-gray);
+  border-radius: 20px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ai-preset-chip:hover {
+  border-color: var(--accent-sage);
+  color: var(--ink);
+  background: rgba(90, 122, 98, 0.04);
+}
+
+.ai-preset-chip.active {
+  border-color: var(--accent-sage);
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+  font-weight: 600;
+}
+
+.preset-emoji {
+  font-size: 13px;
+}
+
+/* ---- Prompt preview ---- */
+.ai-prompt-preview-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-prompt-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-prompt-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.ai-prompt-token-est {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.ai-prompt-preview {
+  flex: 1;
+  min-height: 200px;
+  max-height: calc(100vh - 380px);
+  overflow-y: auto;
+  background: rgba(26, 22, 19, 0.03);
+  border: 1px solid var(--warm-gray);
+  border-radius: 8px;
+  padding: 16px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 2;
+}
+
+/* Custom scrollbar for the preview */
+.ai-prompt-preview::-webkit-scrollbar {
+  width: 5px;
+}
+
+.ai-prompt-preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ai-prompt-preview::-webkit-scrollbar-thumb {
+  background: var(--warm-gray);
+  border-radius: 3px;
+}
+
+/* ---- Copy button ---- */
+.ai-prompt-actions {
+  flex-shrink: 0;
+}
+
+.ai-prompt-copy-btn {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent-sage);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  letter-spacing: 0.2px;
+}
+
+.ai-prompt-copy-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ai-prompt-copy-btn:hover {
+  background: #4a6952;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(90, 122, 98, 0.25);
+}
+
+.ai-prompt-copy-btn:active {
+  transform: translateY(0);
+}
+
+/* Success state after copy */
+.ai-prompt-copy-btn.copied {
+  background: var(--status-active);
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 600px) {
+  .ai-prompt-panel {
+    width: 100vw;
+  }
+
+  .ai-prompt-btn span {
+    display: none;
+  }
+}
+
