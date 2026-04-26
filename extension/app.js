@@ -1644,6 +1644,36 @@ Rules:
 - Group your response by category, not by domain.
 - For each tab, include the domain name and title so I can find it easily.
 
+IMPORTANT — After your human-readable analysis, you MUST output two additional blocks:
+
+**Block 1: Machine-readable action plan** (I will paste this back into my browser extension to auto-execute).
+Use this EXACT format with one URL per line:
+
+---ACTION_PLAN---
+CLOSE:
+https://example.com/page1
+https://example.com/page2
+
+SAVE:
+https://example.com/interesting-article
+
+KEEP:
+https://example.com/active-work
+---END_ACTION_PLAN---
+
+**Block 2: Save-for-later Markdown snippet** — For the tabs you classified as "Save for later", output a clean, standalone Markdown snippet grouped by theme. This will be copied into a note-taking app. Format:
+
+## 📌 Saved Tabs — ${new Date().toISOString().slice(0, 10)}
+
+### Theme Name
+- [Page Title](url)
+- [Page Title](url)
+
+### Another Theme
+- [Page Title](url)
+
+Make this snippet self-contained and ready to paste.
+
 ${tabData.text}`,
 
   summarize: (tabData) => `Analyze my open browser tabs and help me understand what I'm currently working on and researching.
@@ -1824,6 +1854,378 @@ document.addEventListener('click', async (e) => {
   } catch (err) {
     console.error('[tab-out] Failed to copy prompt:', err);
     showToast('Failed to copy — try again');
+  }
+});
+
+
+/* ----------------------------------------------------------------
+   AI PROMPT — Step 2: Parse AI Response + Execute Actions
+
+   Parses the ACTION_PLAN block from an AI response, matches URLs
+   to currently open tabs, renders a confirmation checklist, and
+   executes batch close on user confirmation.
+   ---------------------------------------------------------------- */
+
+/**
+ * parseActionPlan(text)
+ *
+ * Extracts the ACTION_PLAN block from AI response text.
+ * Handles multiple delimiter styles that LLMs commonly produce:
+ *   - ---ACTION_PLAN--- (intended)
+ *   - —ACTION_PLAN—     (em-dash, common GPT behavior)
+ *   - ***ACTION_PLAN*** (markdown bold)
+ *   - ACTION_PLAN       (bare, as fallback)
+ *
+ * Returns { close: string[], save: string[], keep: string[] }
+ */
+function parseActionPlan(text) {
+  const result = { close: [], save: [], keep: [] };
+  if (!text || typeof text !== 'string') return result;
+
+  // Normalize common delimiter variants to a canonical form
+  // Handle: ---ACTION_PLAN---, —ACTION_PLAN—, ***ACTION_PLAN***, **ACTION_PLAN**
+  // Also handle with/without spaces around delimiters
+  const patterns = [
+    // Standard triple-dash
+    /[-]{2,}\s*ACTION_PLAN\s*[-]{2,}([\s\S]*?)[-]{2,}\s*END_ACTION_PLAN\s*[-]{2,}/i,
+    // Em-dash (— or —)
+    /[—–]+\s*ACTION_PLAN\s*[—–]+([\s\S]*?)[—–]+\s*END_ACTION_PLAN\s*[—–]+/i,
+    // Asterisks (markdown bold/emphasis)
+    /[*]{2,}\s*ACTION_PLAN\s*[*]{2,}([\s\S]*?)[*]{2,}\s*END_ACTION_PLAN\s*[*]{2,}/i,
+    // Backtick-fenced code block containing ACTION_PLAN
+    /```[\s\S]*?ACTION_PLAN[\s\S]*?\n([\s\S]*?)```/i,
+    // Bare ACTION_PLAN / END_ACTION_PLAN on their own lines (loosest match)
+    /^\s*ACTION_PLAN\s*$/m,
+  ];
+
+  let block = null;
+
+  // Try structured patterns first
+  for (const pattern of patterns.slice(0, 4)) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      block = match[1];
+      break;
+    }
+  }
+
+  // Fallback: try bare ACTION_PLAN markers on their own lines
+  if (!block) {
+    const startMatch = text.match(/^\s*[-—–*]*\s*ACTION_PLAN\s*[-—–*]*\s*$/im);
+    const endMatch = text.match(/^\s*[-—–*]*\s*END_ACTION_PLAN\s*[-—–*]*\s*$/im);
+    if (startMatch && endMatch && endMatch.index > startMatch.index) {
+      block = text.slice(startMatch.index + startMatch[0].length, endMatch.index);
+    }
+  }
+
+  if (!block) return result;
+
+  // Parse sections within the block
+  let currentSection = null;
+  const lines = block.split('\n');
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Detect section headers
+    const sectionMatch = line.match(/^(CLOSE|SAVE|KEEP)\s*:/i);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].toLowerCase();
+      // Check if there's a URL on the same line after the colon
+      const afterColon = line.slice(sectionMatch[0].length).trim();
+      if (afterColon && looksLikeUrl(afterColon)) {
+        result[currentSection].push(cleanUrl(afterColon));
+      }
+      continue;
+    }
+
+    // Extract URLs from the current section
+    if (currentSection && result[currentSection]) {
+      // Strip common list prefixes: "- ", "* ", "1. ", "> "
+      const cleaned = line.replace(/^[-*>•]\s*/, '').replace(/^\d+\.\s*/, '').trim();
+      if (looksLikeUrl(cleaned)) {
+        result[currentSection].push(cleanUrl(cleaned));
+      } else {
+        // Try to extract URL from within the line (e.g. "[title](url)" or inline URL)
+        const urlMatch = cleaned.match(/(https?:\/\/[^\s)>"]+|file:\/\/[^\s)>"]+)/);
+        if (urlMatch) {
+          result[currentSection].push(cleanUrl(urlMatch[1]));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Does this string look like a URL? */
+function looksLikeUrl(s) {
+  return /^(https?:\/\/|file:\/\/)/.test(s.trim());
+}
+
+/** Clean up a URL extracted from AI text */
+function cleanUrl(url) {
+  return url
+    .trim()
+    .replace(/[,;]+$/, '')  // trailing punctuation
+    .replace(/\)+$/, '')    // trailing parens from markdown
+    .replace(/["'`]+$/, '') // trailing quotes
+    .replace(/\s+.*$/, ''); // anything after whitespace
+}
+
+/**
+ * matchUrlsToOpenTabs(urls)
+ *
+ * Matches a list of URLs from the AI response to currently open tabs.
+ * Uses a multi-tier matching strategy:
+ *   1. Exact URL match
+ *   2. URL match ignoring trailing slash
+ *   3. URL match ignoring hash/query params
+ *   4. Hostname + pathname prefix match (fuzzy)
+ *
+ * Returns { matched: [{url, tab}], unmatched: [url] }
+ */
+function matchUrlsToOpenTabs(urls) {
+  const realTabs = getRealTabs();
+  const matched = [];
+  const unmatched = [];
+  const usedTabIds = new Set();
+
+  for (const url of urls) {
+    let found = null;
+
+    // Tier 1: Exact match
+    found = realTabs.find(t => !usedTabIds.has(t.id) && t.url === url);
+
+    // Tier 2: Ignore trailing slash
+    if (!found) {
+      const normalized = url.replace(/\/$/, '');
+      found = realTabs.find(t => !usedTabIds.has(t.id) && t.url.replace(/\/$/, '') === normalized);
+    }
+
+    // Tier 3: Ignore hash and query params
+    if (!found) {
+      try {
+        const parsed = new URL(url);
+        const base = parsed.origin + parsed.pathname;
+        found = realTabs.find(t => {
+          if (usedTabIds.has(t.id)) return false;
+          try {
+            const tp = new URL(t.url);
+            return (tp.origin + tp.pathname) === base;
+          } catch { return false; }
+        });
+      } catch {}
+    }
+
+    // Tier 4: Hostname + pathname prefix (for URLs AI may have truncated)
+    if (!found) {
+      try {
+        const parsed = new URL(url);
+        found = realTabs.find(t => {
+          if (usedTabIds.has(t.id)) return false;
+          try {
+            const tp = new URL(t.url);
+            return tp.hostname === parsed.hostname &&
+                   tp.pathname.startsWith(parsed.pathname.replace(/\/$/, ''));
+          } catch { return false; }
+        });
+      } catch {}
+    }
+
+    if (found) {
+      usedTabIds.add(found.id);
+      matched.push({ url, tab: found });
+    } else {
+      unmatched.push(url);
+    }
+  }
+
+  return { matched, unmatched };
+}
+
+// Store parsed results for execution
+let pendingCloseActions = [];
+
+/**
+ * renderActionChecklist(matched, unmatched)
+ *
+ * Renders the confirmation checklist with matched tabs (checkboxes)
+ * and unmatched URLs (greyed out info).
+ */
+function renderActionChecklist(matched, unmatched) {
+  const resultsEl = document.getElementById('aiActionResults');
+  const titleEl   = document.getElementById('aiActionResultsTitle');
+  const listEl    = document.getElementById('aiActionChecklist');
+  const unmatchedEl     = document.getElementById('aiActionUnmatched');
+  const unmatchedListEl = document.getElementById('aiActionUnmatchedList');
+
+  if (!resultsEl || !listEl) return;
+
+  pendingCloseActions = matched;
+
+  // Title
+  titleEl.textContent = `🗑️ Close (${matched.length} tab${matched.length !== 1 ? 's' : ''} matched)`;
+
+  // Render checklist items
+  listEl.innerHTML = matched.map((item, idx) => {
+    const tab = item.tab;
+    let domain = '';
+    try { domain = new URL(tab.url).hostname; } catch {}
+    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const title = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), domain);
+
+    return `<div class="ai-action-item">
+      <input type="checkbox" checked data-close-idx="${idx}">
+      ${faviconUrl ? `<img class="ai-action-item-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+      <div class="ai-action-item-info">
+        <div class="ai-action-item-title">${title}</div>
+        <div class="ai-action-item-domain">${domain}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Unmatched URLs
+  if (unmatched.length > 0) {
+    unmatchedListEl.innerHTML = unmatched.map(url =>
+      `<div class="unmatched-url">${url}</div>`
+    ).join('');
+    unmatchedEl.style.display = 'block';
+  } else {
+    unmatchedEl.style.display = 'none';
+  }
+
+  // Show results
+  resultsEl.style.display = 'block';
+  updateExecuteCount();
+}
+
+/**
+ * updateExecuteCount()
+ *
+ * Updates the execute button text to reflect how many checkboxes are checked.
+ */
+function updateExecuteCount() {
+  const checkboxes = document.querySelectorAll('#aiActionChecklist input[type="checkbox"]');
+  const checked = Array.from(checkboxes).filter(cb => cb.checked).length;
+  const btnText = document.getElementById('aiExecuteBtnText');
+  const btn = document.getElementById('aiExecuteBtn');
+  if (btnText) btnText.textContent = `Close ${checked} selected tab${checked !== 1 ? 's' : ''}`;
+  if (btn) btn.disabled = checked === 0;
+}
+
+// ---- Step 2 event listeners ----
+
+// Parse AI response
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-action="parse-ai-response"]')) return;
+
+  const textarea = document.getElementById('aiPasteInput');
+  if (!textarea || !textarea.value.trim()) {
+    showToast('Paste the AI response first');
+    return;
+  }
+
+  const plan = parseActionPlan(textarea.value);
+
+  if (plan.close.length === 0) {
+    showToast('No CLOSE URLs found — check the AI response format');
+    return;
+  }
+
+  const { matched, unmatched } = matchUrlsToOpenTabs(plan.close);
+
+  if (matched.length === 0) {
+    showToast(`Found ${plan.close.length} URLs but none matched open tabs`);
+    return;
+  }
+
+  renderActionChecklist(matched, unmatched);
+  showToast(`Matched ${matched.length} of ${plan.close.length} tabs`);
+});
+
+// Select all / Clear
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="ai-select-all"]')) {
+    document.querySelectorAll('#aiActionChecklist input[type="checkbox"]').forEach(cb => cb.checked = true);
+    updateExecuteCount();
+  }
+  if (e.target.closest('[data-action="ai-select-none"]')) {
+    document.querySelectorAll('#aiActionChecklist input[type="checkbox"]').forEach(cb => cb.checked = false);
+    updateExecuteCount();
+  }
+});
+
+// Update count when individual checkboxes change
+document.getElementById('aiActionChecklist')?.addEventListener('change', updateExecuteCount);
+// Also handle click delegation for dynamically created checkboxes
+document.addEventListener('change', (e) => {
+  if (e.target.closest('#aiActionChecklist')) updateExecuteCount();
+});
+
+// Execute close
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('[data-action="execute-ai-close"]')) return;
+
+  const checkboxes = document.querySelectorAll('#aiActionChecklist input[type="checkbox"]');
+  const toClose = [];
+
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      const idx = parseInt(cb.dataset.closeIdx);
+      if (pendingCloseActions[idx]) {
+        toClose.push(pendingCloseActions[idx].tab);
+      }
+    }
+  });
+
+  if (toClose.length === 0) return;
+
+  const btn = document.getElementById('aiExecuteBtn');
+  const btnText = document.getElementById('aiExecuteBtnText');
+
+  try {
+    // Close all selected tabs
+    const tabIds = [];
+    for (const tab of toClose) {
+      // Find the actual Chrome tab (might be suspended)
+      const allTabs = await chrome.tabs.query({});
+      const match = allTabs.find(t => t.id === tab.id)
+                 || allTabs.find(t => t.url === tab.url)
+                 || allTabs.find(t => {
+                      const s = parseSuspendedTab(t.url);
+                      return s && s.originalUrl === tab.url;
+                    });
+      if (match) tabIds.push(match.id);
+    }
+
+    if (tabIds.length > 0) {
+      await chrome.tabs.remove(tabIds);
+    }
+
+    await fetchOpenTabs();
+
+    // Confetti burst from the execute button
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      shootConfetti(rect.left + rect.width / 2, rect.top);
+    }
+    playCloseSound();
+
+    // Success state
+    if (btn) btn.classList.add('executed');
+    if (btnText) btnText.textContent = `✓ Closed ${toClose.length} tabs`;
+    if (btn) btn.disabled = true;
+
+    showToast(`Closed ${toClose.length} tabs — nice cleanup!`);
+
+    // Refresh the main dashboard after a short delay
+    setTimeout(() => renderDashboard(), 600);
+
+  } catch (err) {
+    console.error('[tab-out] Failed to close tabs:', err);
+    showToast('Failed to close some tabs — try again');
   }
 });
 

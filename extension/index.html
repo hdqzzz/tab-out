@@ -85,6 +85,44 @@
           Copy to Clipboard
         </button>
       </div>
+
+      <!-- Step 2: Paste AI Response back -->
+      <div class="ai-paste-divider">
+        <div class="ai-paste-divider-line"></div>
+        <span class="ai-paste-divider-text">Step 2 · Paste AI Response</span>
+        <div class="ai-paste-divider-line"></div>
+      </div>
+
+      <textarea class="ai-paste-input" id="aiPasteInput" placeholder="Paste the AI's full response here...&#10;&#10;The extension will extract the ACTION_PLAN block and show you a confirmation checklist before closing any tabs." rows="6"></textarea>
+
+      <button class="ai-parse-btn" id="aiParseBtn" data-action="parse-ai-response">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+        Parse & Preview Actions
+      </button>
+
+      <!-- Results area — hidden until parse completes -->
+      <div class="ai-action-results" id="aiActionResults" style="display:none">
+        <div class="ai-action-results-header">
+          <span class="ai-action-results-title" id="aiActionResultsTitle">🗑️ Close (0 tabs)</span>
+          <div class="ai-action-results-controls">
+            <button class="ai-action-toggle" data-action="ai-select-all">Select all</button>
+            <button class="ai-action-toggle" data-action="ai-select-none">Clear</button>
+          </div>
+        </div>
+        <div class="ai-action-checklist" id="aiActionChecklist"></div>
+
+        <!-- Unmatched URLs (if any) -->
+        <div class="ai-action-unmatched" id="aiActionUnmatched" style="display:none">
+          <div class="ai-action-unmatched-title">⚠️ Not matched</div>
+          <div class="ai-action-unmatched-list" id="aiActionUnmatchedList"></div>
+        </div>
+
+        <button class="ai-execute-btn" id="aiExecuteBtn" data-action="execute-ai-close">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+          <span id="aiExecuteBtnText">Close 0 selected tabs</span>
+        </button>
+      </div>
+
     </div>
   </div>
 
